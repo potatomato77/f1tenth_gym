@@ -11,6 +11,7 @@ import argparse
 from collections import defaultdict
 import csv
 import json
+import math
 from pathlib import Path
 import time
 
@@ -67,6 +68,75 @@ def _lap_time(info: dict) -> float | None:
     return float(times[0]) if times is not None else None
 
 
+def parse_float_list(text: str) -> list[float]:
+    try:
+        values = [float(part) for part in text.split(",") if part.strip()]
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(str(error)) from error
+    if not values or not all(math.isfinite(value) for value in values):
+        raise argparse.ArgumentTypeError("expected a non-empty finite list")
+    return values
+
+
+def build_cases(args) -> list[dict]:
+    """Fixed-seed nominal runs, or the Cartesian product of start offsets."""
+    if args.lateral_offsets is None and args.heading_offsets_deg is None:
+        return [
+            {
+                "index": index,
+                "seed": args.seed + index,
+                "lateral_m": 0.0,
+                "heading_deg": 0.0,
+            }
+            for index in range(args.episodes)
+        ]
+    lateral = args.lateral_offsets or [0.0]
+    heading = args.heading_offsets_deg or [0.0]
+    cases = []
+    for lateral_m in lateral:
+        for heading_deg in heading:
+            index = len(cases)
+            cases.append(
+                {
+                    "index": index,
+                    "seed": args.seed + index,
+                    "lateral_m": float(lateral_m),
+                    "heading_deg": float(heading_deg),
+                }
+            )
+    return cases
+
+
+def nominal_initial_state(env, seed: int) -> np.ndarray:
+    _, info = env.reset(seed=seed)
+    return np.array(info["residual"]["std_state"], dtype=np.float64, copy=True)
+
+
+def perturb_initial_state(
+    env, state: np.ndarray, lateral_m: float, heading_deg: float
+) -> np.ndarray:
+    """Shift the CoG along the local path normal and rotate the heading."""
+    state = np.array(state, dtype=np.float64, copy=True)
+    command = env.controller.plan(state[[0, 1, 4]])
+    projection = command.projection
+    if projection is None:
+        raise ValueError("cannot perturb a start state without a path projection")
+    tangent = np.asarray(
+        env.controller.vectors[projection.segment], dtype=np.float64
+    )
+    norm = float(np.linalg.norm(tangent))
+    if norm == 0:
+        raise ValueError("reference path has a zero-length segment")
+    tangent /= norm
+    normal = np.array([-tangent[1], tangent[0]], dtype=np.float64)
+    state[0] += lateral_m * normal[0]
+    state[1] += lateral_m * normal[1]
+    state[4] = (
+        state[4] + math.radians(heading_deg) + math.pi
+    ) % (2 * math.pi) - math.pi
+    return state.astype(np.float32)
+
+
 def run_episode(
     env,
     model,
@@ -74,8 +144,16 @@ def run_episode(
     seed: int,
     render: bool,
     trajectory_path: Path | None = None,
+    initial_state: np.ndarray | None = None,
+    case: dict | None = None,
 ) -> dict:
-    observation, info = env.reset(seed=seed)
+    if initial_state is None:
+        observation, info = env.reset(seed=seed)
+    else:
+        observation, info = env.reset(
+            seed=seed,
+            options={"states": np.asarray(initial_state, dtype=np.float32)[None, :]},
+        )
     if render:
         env.render()
     steps = 0
@@ -162,12 +240,24 @@ def run_episode(
 
     residual = info["residual"]
     end_reason = residual.get("end_reason", "")
+    spawn_collision = bool(
+        initial_state is not None and steps <= 1 and end_reason == "collision"
+    )
     rear_array = np.asarray(rear, dtype=np.float64)
     heading_array = np.asarray(heading, dtype=np.float64)
     latency_ms = np.asarray(latency, dtype=np.float64) * 1000.0
     return {
         "seed": seed,
+        "case_index": int(case["index"]) if case else 0,
+        "lateral_offset_m": float(case["lateral_m"]) if case else 0.0,
+        "heading_offset_deg": float(case["heading_deg"]) if case else 0.0,
+        "initial_state": (
+            None
+            if initial_state is None
+            else np.asarray(initial_state, dtype=float).tolist()
+        ),
         "success": bool(info.get("is_success")),
+        "spawn_collision": spawn_collision,
         "end_reason": end_reason,
         "collision": end_reason == "collision",
         "tracking_stop": end_reason == "tracking_stop",
@@ -202,34 +292,37 @@ def _mean(values):
 
 
 def summarize(label: str, episodes: list[dict]) -> dict:
+    valid = [episode for episode in episodes if not episode.get("spawn_collision")]
+    invalid_starts = len(episodes) - len(valid)
     completed_laps = [
-        lap for episode in episodes for lap in episode["full_lap_times_s"]
+        lap for episode in valid for lap in episode["full_lap_times_s"]
     ]
     return {
         "label": label,
-        "episodes": len(episodes),
-        "success_rate": _mean([float(e["success"]) for e in episodes]),
-        "collision_rate": _mean([float(e["collision"]) for e in episodes]),
+        "episodes": len(valid),
+        "invalid_starts": invalid_starts,
+        "success_rate": _mean([float(e["success"]) for e in valid]),
+        "collision_rate": _mean([float(e["collision"]) for e in valid]),
         "tracking_stop_rate": _mean(
-            [float(e["tracking_stop"]) for e in episodes]
+            [float(e["tracking_stop"]) for e in valid]
         ),
-        "timeout_rate": _mean([float(e["timeout"]) for e in episodes]),
-        "rear_rms_m_mean": _mean([e["rear_rms_m"] for e in episodes]),
-        "rear_p95_m_mean": _mean([e["rear_p95_m"] for e in episodes]),
-        "heading_rms_rad_mean": _mean([e["heading_rms_rad"] for e in episodes]),
-        "mean_abs_z": _mean([e["mean_abs_z"] for e in episodes]),
-        "max_abs_z": _mean([e["max_abs_z"] for e in episodes]),
-        "clip_fraction_mean": _mean([e["clip_fraction"] for e in episodes]),
-        "episode_return_mean": _mean([e["episode_return"] for e in episodes]),
-        "episode_steps_mean": _mean([float(e["steps"]) for e in episodes]),
+        "timeout_rate": _mean([float(e["timeout"]) for e in valid]),
+        "rear_rms_m_mean": _mean([e["rear_rms_m"] for e in valid]),
+        "rear_p95_m_mean": _mean([e["rear_p95_m"] for e in valid]),
+        "heading_rms_rad_mean": _mean([e["heading_rms_rad"] for e in valid]),
+        "mean_abs_z": _mean([e["mean_abs_z"] for e in valid]),
+        "max_abs_z": _mean([e["max_abs_z"] for e in valid]),
+        "clip_fraction_mean": _mean([e["clip_fraction"] for e in valid]),
+        "episode_return_mean": _mean([e["episode_return"] for e in valid]),
+        "episode_steps_mean": _mean([float(e["steps"]) for e in valid]),
         "full_lap_time_mean_s": _mean(completed_laps),
         "full_lap_time_min_s": min(completed_laps) if completed_laps else None,
         "complete_laps_total": len(completed_laps),
         "inference_latency_ms_mean": _mean(
-            [e["inference_latency_ms_mean"] for e in episodes]
+            [e["inference_latency_ms_mean"] for e in valid]
         ),
         "inference_latency_ms_p95": _mean(
-            [e["inference_latency_ms_p95"] for e in episodes]
+            [e["inference_latency_ms_p95"] for e in valid]
         ),
         "episodes_detail": episodes,
     }
@@ -240,8 +333,24 @@ def parse_args(argv=None):
     add_env_arguments(parser)
     parser.add_argument("--run-dir", type=Path)
     parser.add_argument("--model", type=Path)
-    parser.add_argument("--episodes", type=int, default=3)
+    parser.add_argument(
+        "--episodes",
+        type=int,
+        default=3,
+        help="number of fixed-seed nominal runs when no offsets are given",
+    )
     parser.add_argument("--seed", type=int, default=12345)
+    parser.add_argument(
+        "--lateral-offsets",
+        type=parse_float_list,
+        help="comma-separated CoG lateral offsets in metres; "
+        "evaluates the Cartesian product with heading offsets",
+    )
+    parser.add_argument(
+        "--heading-offsets-deg",
+        type=parse_float_list,
+        help="comma-separated heading offsets in degrees",
+    )
     parser.add_argument(
         "--device", choices=("cpu", "auto", "cuda"), default="cpu"
     )
@@ -297,14 +406,38 @@ def main(argv=None) -> int:
     model = SAC.load(str(model_path), env=None, device=args.device)
     model.policy.set_training_mode(False)
 
+    perturbation_mode = (
+        args.lateral_offsets is not None or args.heading_offsets_deg is not None
+    )
+    cases = build_cases(args)
+    if perturbation_mode:
+        print(
+            f"Using perturbation grid: {len(cases)} cases; --episodes is ignored"
+        )
+
     episodes = {"zero_residual": [], "policy": []}
     env = build_env(settings, render=args.render)
     try:
         if args.render:
             add_render_overlays(env, settings.reference)
-        for index in range(args.episodes):
-            seed = args.seed + index
-            print(f"[{index + 1}/{args.episodes}] zero residual, seed {seed}")
+        base_state = None
+        if perturbation_mode:
+            base_state = nominal_initial_state(env, args.seed)
+            print(f"Nominal start state: {base_state.tolist()}")
+        for case in cases:
+            seed = case["seed"]
+            description = (
+                f"lateral {case['lateral_m']:+.3f} m, "
+                f"heading {case['heading_deg']:+.2f} deg"
+            )
+            if perturbation_mode:
+                initial_state = perturb_initial_state(
+                    env, base_state, case["lateral_m"], case["heading_deg"]
+                )
+            else:
+                initial_state = None
+            position = f"{case['index'] + 1}/{len(cases)}"
+            print(f"[{position}] zero residual, {description}, seed {seed}")
             episodes["zero_residual"].append(
                 run_episode(
                     env,
@@ -312,13 +445,17 @@ def main(argv=None) -> int:
                     seed=seed,
                     render=args.render,
                     trajectory_path=(
-                        output_dir / "trajectories" / f"zero_residual_seed{seed}.csv"
+                        output_dir
+                        / "trajectories"
+                        / f"zero_residual_case{case['index']:02d}_seed{seed}.csv"
                         if args.trajectory
                         else None
                     ),
+                    initial_state=initial_state,
+                    case=case,
                 )
             )
-            print(f"[{index + 1}/{args.episodes}] policy, seed {seed}")
+            print(f"[{position}] policy, {description}, seed {seed}")
             episodes["policy"].append(
                 run_episode(
                     env,
@@ -326,10 +463,14 @@ def main(argv=None) -> int:
                     seed=seed,
                     render=args.render,
                     trajectory_path=(
-                        output_dir / "trajectories" / f"policy_seed{seed}.csv"
+                        output_dir
+                        / "trajectories"
+                        / f"policy_case{case['index']:02d}_seed{seed}.csv"
                         if args.trajectory
                         else None
                     ),
+                    initial_state=initial_state,
+                    case=case,
                 )
             )
     finally:
@@ -359,24 +500,60 @@ def main(argv=None) -> int:
             ),
         }
 
+    case_comparison = []
+    for baseline_episode, policy_episode in zip(
+        episodes["zero_residual"], episodes["policy"]
+    ):
+        case_comparison.append(
+            {
+                "case_index": baseline_episode["case_index"],
+                "seed": baseline_episode["seed"],
+                "lateral_offset_m": baseline_episode["lateral_offset_m"],
+                "heading_offset_deg": baseline_episode["heading_offset_deg"],
+                "zero_success": baseline_episode["success"],
+                "policy_success": policy_episode["success"],
+                "zero_spawn_collision": baseline_episode["spawn_collision"],
+                "policy_spawn_collision": policy_episode["spawn_collision"],
+                "zero_end_reason": baseline_episode["end_reason"],
+                "policy_end_reason": policy_episode["end_reason"],
+                "zero_rear_rms_m": baseline_episode["rear_rms_m"],
+                "policy_rear_rms_m": policy_episode["rear_rms_m"],
+                "zero_rear_p95_m": baseline_episode["rear_p95_m"],
+                "policy_rear_p95_m": policy_episode["rear_p95_m"],
+                "zero_lap_time_s": baseline_episode["last_full_lap_time_s"],
+                "policy_lap_time_s": policy_episode["last_full_lap_time_s"],
+            }
+        )
+
     report = run_metadata(
         settings,
         command=command_line(),
         model=str(model_path),
         evaluation={
-            "episodes": args.episodes,
+            "episodes": len(cases),
             "seed": args.seed,
             "device": str(model.device),
             "render": args.render,
+            "lateral_offsets_m": args.lateral_offsets,
+            "heading_offsets_deg": args.heading_offsets_deg,
+            "perturbation_mode": perturbation_mode,
+            "base_initial_state": (
+                None if base_state is None else base_state.tolist()
+            ),
         },
         results=summaries,
         comparison=comparison,
+        case_comparison=case_comparison,
     )
     write_json(output_dir / "summary.json", report)
 
     fields = [
         "label",
         "seed",
+        "case_index",
+        "lateral_offset_m",
+        "heading_offset_deg",
+        "spawn_collision",
         "success",
         "end_reason",
         "steps",
@@ -408,6 +585,22 @@ def main(argv=None) -> int:
                 )
 
     print(json.dumps({"comparison": comparison}, indent=2))
+    if args.lateral_offsets is not None or args.heading_offsets_deg is not None:
+        print("\nPer-case results (zero -> policy):")
+        for case in case_comparison:
+            marker = (
+                "  [invalid start]"
+                if case["zero_spawn_collision"] or case["policy_spawn_collision"]
+                else ""
+            )
+            print(
+                f"  lateral {case['lateral_offset_m']:+.3f} m, "
+                f"heading {case['heading_offset_deg']:+.2f} deg: "
+                f"success {int(case['zero_success'])} -> "
+                f"{int(case['policy_success'])}, "
+                f"RMS {case['zero_rear_rms_m']:.4f} -> "
+                f"{case['policy_rear_rms_m']:.4f} m{marker}"
+            )
     print(f"Results: {output_dir.resolve()}")
     return 0
 

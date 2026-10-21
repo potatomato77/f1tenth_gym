@@ -23,6 +23,7 @@ Gymnasium environment. This fork adds a residual SAC steering study in
   and decomposed reward;
 - zero-residual equivalence and random-action interface validation;
 - SB3 SAC training, checkpoint/resume, and baseline-versus-policy evaluation;
+- initial lateral/heading perturbation grids with invalid-start detection;
 - native Windows rendering adaptations and additional tests.
 
 The simulator, examples, documentation and upstream tests remain from the
