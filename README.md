@@ -12,6 +12,22 @@
 > environment and reward, SAC training/evaluation pipeline, and native Windows
 > rendering adaptations.
 
+## What this fork adds
+
+The upstream project provides the simulator, vehicle dynamics and base
+Gymnasium environment. This fork adds a residual SAC steering study in
+[SAC_project/](SAC_project/README.md):
+
+- a rear-axle pure pursuit baseline with reproducible lap and tracking metrics;
+- a residual steering wrapper with fixed 25-D features, bounded action contract
+  and decomposed reward;
+- zero-residual equivalence and random-action interface validation;
+- SB3 SAC training, checkpoint/resume, and baseline-versus-policy evaluation;
+- native Windows rendering adaptations and additional tests.
+
+The simulator, examples, documentation and upstream tests remain from the
+f1tenth_gym authors; see [LICENSE](LICENSE).
+
 This is the repository of the F1TENTH Gym environment.
 
 This project is still under heavy developement.

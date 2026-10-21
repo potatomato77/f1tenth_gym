@@ -145,6 +145,9 @@ Windows 桌面显示路径与当前目标点：
 零残差基线。两者共享 `rl_common.py` 中的任务配置，训练结束会把完整配置写入
 `train_config.json`，评测可直接从运行目录恢复同一套特征、奖励和动作契约。
 
+服务器首次配置可运行 [scripts/setup_server.sh](../scripts/setup_server.sh)，它会浅克隆
+当前分支、创建虚拟环境并安装项目与训练依赖。
+
 ### 本地链路验收
 
 ```powershell
