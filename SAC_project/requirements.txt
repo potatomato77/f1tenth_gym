@@ -1,0 +1,2 @@
+# Install the repository itself first; these are project-specific extras.
+matplotlib>=3.8.2,<4
