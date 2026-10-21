@@ -16,7 +16,10 @@ BRANCH="${BRANCH:-study/sac-residual}"
 TARGET="${1:-f1tenth-residual-sac}"
 PYTHON="${PYTHON:-python3}"
 
-if [ -d "$TARGET/.git" ]; then
+if [ "$#" -eq 0 ] && [ -d .git ] && [ -f SAC_project/train.py ]; then
+    TARGET="."
+    echo "Using the current checkout at $PWD"
+elif [ -d "$TARGET/.git" ]; then
     echo "Updating $TARGET"
     git -C "$TARGET" pull --ff-only
 elif [ -e "$TARGET" ]; then
