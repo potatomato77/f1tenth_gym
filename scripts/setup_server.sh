@@ -16,7 +16,7 @@ BRANCH="${BRANCH:-study/sac-residual}"
 TARGET="${1:-f1tenth-residual-sac}"
 PYTHON="${PYTHON:-python3}"
 
-if [ "$#" -eq 0 ] && [ -d .git ] && [ -f SAC_project/train.py ]; then
+if [ "$#" -eq 0 ] && [ -f SAC_project/train.py ]; then
     TARGET="."
     echo "Using the current checkout at $PWD"
 elif [ -d "$TARGET/.git" ]; then
