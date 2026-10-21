@@ -14,6 +14,18 @@ often a distinct frame is produced, and what frame rate a recorded video
 claims — and nearly every question about frames is really a question about
 which of the three was meant.
 
+Display setup
+-------------
+
+Native Windows uses Qt's ``windows`` platform and PyOpenGL's ``nt`` (WGL)
+backend. It does not require ``DISPLAY`` or an X server. Explicit
+``QT_QPA_PLATFORM`` and ``PYOPENGL_PLATFORM`` settings take precedence; remove
+Linux-only overrides such as ``xcb`` and ``x11`` before running on Windows.
+
+Linux pixel rendering uses ``xcb``/``x11`` and requires ``DISPLAY``. On a
+headless Linux server, run under ``xvfb-run -a`` to capture frames. Training
+with ``render_enabled=False`` and no render mode requires no display.
+
 The three clocks
 ----------------
 
@@ -169,11 +181,12 @@ either way.
 Why the backend needs a display
 -------------------------------
 
-OpenGL cannot allocate a framebuffer without an X server, so there is no
-offscreen Qt path and no 2D raster fallback. Requesting any of the four modes
-with ``$DISPLAY`` unset raises a ``RuntimeError`` at construction whose
-message walks through the fix, rather than failing deep inside Qt. A virtual
-server satisfies it as well as a real one:
+On Linux, the configured Qt/GLX backend needs an X server even for hidden
+``rgb_array`` windows; there is no separate offscreen or 2D raster fallback.
+Requesting any of the four modes with ``$DISPLAY`` unset on Linux raises a
+``RuntimeError`` at construction with setup guidance. Native Windows uses
+its desktop Qt/WGL backend and does not perform this X-display check.
+A virtual X server satisfies the Linux backend as well as a real one:
 
 .. code-block:: bash
 
@@ -190,8 +203,9 @@ GUI window in a notebook:
 
    Display(visible=0, size=(800, 800)).start()
 
-CI runs the whole test suite under ``xvfb-run``, and the renderer cases skip
-themselves when ``$DISPLAY`` is unset (:doc:`installation`).
+Linux CI runs the whole test suite under ``xvfb-run``, and the renderer
+cases skip themselves on Linux when ``$DISPLAY`` is unset (:doc:`installation`).
+On native Windows the renderer cases use the desktop display.
 
 Grabbing frames and recording video
 -----------------------------------

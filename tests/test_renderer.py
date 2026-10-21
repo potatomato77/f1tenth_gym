@@ -1,4 +1,5 @@
 import os
+import sys
 import time
 import unittest
 from types import SimpleNamespace
@@ -17,9 +18,8 @@ from f1tenth_gym.envs.observation import ObservationType
 from f1tenth_gym.envs.rendering import make_lidar_scan_callback, make_renderer
 import gymnasium as gym
 
-# rgb_array/human rendering uses the GL backend, which needs an X display
-# (real or a virtual one via xvfb). Skip display-bound tests when there is none.
-_HAS_DISPLAY = bool(os.environ.get("DISPLAY"))
+# Windows uses its native desktop; Linux needs a real or virtual X display.
+_HAS_DISPLAY = sys.platform == "win32" or bool(os.environ.get("DISPLAY"))
 
 
 def _rgb_env(render_fps=60, real_time_factor=1.0, timestep=0.01):
@@ -37,7 +37,7 @@ def _rgb_env(render_fps=60, real_time_factor=1.0, timestep=0.01):
     )
 
 
-@unittest.skipUnless(_HAS_DISPLAY, "rendering needs an X display (run under xvfb)")
+@unittest.skipUnless(_HAS_DISPLAY, "rendering needs a desktop display (Linux: xvfb)")
 class TestRenderer(unittest.TestCase):
     def test_rgb_array_render(self):
         env =  gym.make(
@@ -245,7 +245,8 @@ class TestNoDisplayGuidance(unittest.TestCase):
     """make_renderer must fail loudly with setup guidance when no display exists."""
 
     def test_rgb_array_without_display_raises_with_guidance(self):
-        with mock.patch.dict(os.environ, {}, clear=False):
+        with mock.patch("f1tenth_gym.envs.rendering.sys.platform", "linux"), \
+                mock.patch.dict(os.environ, {}, clear=False):
             os.environ.pop("DISPLAY", None)
             with self.assertRaises(RuntimeError) as ctx:
                 # params/track are unused before the display check raises
@@ -257,6 +258,43 @@ class TestNoDisplayGuidance(unittest.TestCase):
             os.environ.pop("DISPLAY", None)
             renderer, _ = make_renderer(None, None, ["agent_0"], render_mode=None)
             self.assertIsNone(renderer)
+
+
+class TestPlatformRendering(unittest.TestCase):
+    def test_windows_pixel_modes_construct_without_x_display(self):
+        for mode in ("human", "human_fast", "unlimited", "rgb_array"):
+            with self.subTest(mode=mode):
+                constructor = mock.Mock(return_value=mock.sentinel.renderer)
+                backend = SimpleNamespace(PyQtEnvRendererGL=constructor)
+                with mock.patch("f1tenth_gym.envs.rendering.sys.platform", "win32"), \
+                        mock.patch.dict(os.environ, {}, clear=True), \
+                        mock.patch.dict(sys.modules, {
+                            "f1tenth_gym.envs.rendering.rendering_pyqtgl": backend,
+                        }):
+                    renderer, config = make_renderer(
+                        None, None, ["agent_0"], render_mode=mode,
+                    )
+                    self.assertIs(renderer, mock.sentinel.renderer)
+                    self.assertEqual(os.environ["QT_QPA_PLATFORM"], "windows")
+                    self.assertEqual(os.environ["PYOPENGL_PLATFORM"], "nt")
+                    constructor.assert_called_once_with(
+                        params=None, track=None, agent_ids=["agent_0"],
+                        render_config=config, render_mode=mode,
+                    )
+
+    def test_linux_display_constructs_x11_renderer(self):
+        constructor = mock.Mock(return_value=mock.sentinel.renderer)
+        backend = SimpleNamespace(PyQtEnvRendererGL=constructor)
+        with mock.patch("f1tenth_gym.envs.rendering.sys.platform", "linux"), \
+                mock.patch.dict(os.environ, {"DISPLAY": ":99"}, clear=True), \
+                mock.patch.dict(sys.modules, {
+                    "f1tenth_gym.envs.rendering.rendering_pyqtgl": backend,
+                }):
+            renderer, _ = make_renderer(None, None, ["agent_0"], render_mode="rgb_array")
+            self.assertIs(renderer, mock.sentinel.renderer)
+            self.assertEqual(os.environ["QT_QPA_PLATFORM"], "xcb")
+            self.assertEqual(os.environ["PYOPENGL_PLATFORM"], "x11")
+            constructor.assert_called_once()
 
 
 class TestRenderClock(unittest.TestCase):

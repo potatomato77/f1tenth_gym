@@ -1,4 +1,5 @@
 import os
+import sys
 from typing import Optional, TYPE_CHECKING
 
 from .renderer import EnvRenderer, ObjectRenderer
@@ -28,7 +29,7 @@ NO_DISPLAY_GUIDANCE = (
     "    then use render_mode='rgb_array' and embed the frames/video inline."
 )
 
-# Render modes that draw pixels and therefore require a display. (gymnasium
+# Render modes that draw pixels and therefore require a desktop display. (gymnasium
 # strips the "_list" suffix, so the env only ever sees "rgb_array" here.)
 _DISPLAY_RENDER_MODES = ("human", "human_fast", "unlimited", "rgb_array")
 
@@ -42,11 +43,12 @@ def make_renderer(
 ) -> tuple[EnvRenderer, "RenderConfig"]:
     """Return a GL renderer and the RenderConfig it was built from.
 
-    The OpenGL backend needs an X display, real or virtual (``xvfb``). A display
-    mode with no ``$DISPLAY`` raises setup guidance rather than failing deep in Qt.
+    Windows uses its native Qt/WGL backend without an X display. Other platforms
+    require ``$DISPLAY`` and raise setup guidance before constructing Qt objects.
     """
     needs_display = render_mode in _DISPLAY_RENDER_MODES
-    if needs_display and not os.environ.get("DISPLAY"):
+    is_windows = sys.platform == "win32"
+    if needs_display and not is_windows and not os.environ.get("DISPLAY"):
         raise RuntimeError(NO_DISPLAY_GUIDANCE)
 
     if render_config is None:
@@ -56,8 +58,12 @@ def make_renderer(
     if render_mode in ["human", "rgb_array", "unlimited", "human_fast"]:
         # Qt and PyOpenGL must agree on the windowing API, else the cars vanish
         # from rgb_array frames. Both pins must precede the first GL import below.
-        os.environ.setdefault("QT_QPA_PLATFORM", "xcb")
-        os.environ.setdefault("PYOPENGL_PLATFORM", "x11")
+        if is_windows:
+            os.environ.setdefault("QT_QPA_PLATFORM", "windows")
+            os.environ.setdefault("PYOPENGL_PLATFORM", "nt")
+        else:
+            os.environ.setdefault("QT_QPA_PLATFORM", "xcb")
+            os.environ.setdefault("PYOPENGL_PLATFORM", "x11")
         # NVIDIA ignores the backend's swap interval 0 and holds swapBuffers to the
         # vblank, pinning human modes to the monitor refresh: 59.9 vs 1051 Hz.
         os.environ.setdefault("__GL_SYNC_TO_VBLANK", "0")

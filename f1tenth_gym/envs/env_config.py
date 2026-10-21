@@ -287,8 +287,9 @@ class RenderConfig:
         bigger_car_when_map_centered: Scale cars up in the zoomed-out map view.
         show_lap_info: Overlay the lap-time / lap-count label on the frame.
 
-    Rendering uses the OpenGL backend and therefore needs an X display (real or
-    a virtual one via ``xvfb``); see ``make_renderer`` for headless/Colab setup.
+    Rendering uses the OpenGL backend with the native Windows desktop or an
+    X display on Linux (real or virtual via ``xvfb``); see ``make_renderer`` for
+    headless/Colab setup.
     """
 
     render_fps: int = 60
