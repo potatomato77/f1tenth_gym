@@ -4,6 +4,14 @@
 
 # The F1TENTH Gym environment
 
+> **Fork note:** This repository is a fork of
+> [f1tenth_gym](https://github.com/f1tenth/f1tenth_gym) (MIT License).
+> The upstream project provides the simulator, vehicle dynamics and base
+> Gymnasium environment. This fork adds a residual SAC steering study under
+> [SAC_project/](SAC_project/README.md): a pure-pursuit baseline, residual
+> environment and reward, SAC training/evaluation pipeline, and native Windows
+> rendering adaptations.
+
 This is the repository of the F1TENTH Gym environment.
 
 This project is still under heavy developement.
