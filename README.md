@@ -24,6 +24,8 @@ Gymnasium environment. This fork adds a residual SAC steering study in
 - zero-residual equivalence and random-action interface validation;
 - SB3 SAC training, checkpoint/resume, and baseline-versus-policy evaluation;
 - initial lateral/heading perturbation grids with invalid-start detection;
+- a 3-seed, 500k-step perturbation study with figures in
+  [SAC_project/results/3seed_500k/](SAC_project/results/3seed_500k/);
 - native Windows rendering adaptations and additional tests.
 
 The simulator, examples, documentation and upstream tests remain from the
