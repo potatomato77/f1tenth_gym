@@ -1,0 +1,5 @@
+-r requirements.txt
+# Optional environment checker / future SAC stack; choose the CUDA Torch wheel
+# separately on the training server. These bounds retain the tested API line.
+stable-baselines3==2.9.0
+torch>=2.8,<2.11
